@@ -1,23 +1,26 @@
 #![no_std]
 
+extern crate alloc;
+pub mod rwlock;
+
+pub use rwlock::*;
+pub mod ticket;
+pub use ticket::*;
+pub mod spin;
+pub use spin::*;
+
 cfg_if::cfg_if! {
-    if #[cfg(all(target_os = "none", feature = "ticket"))] {
-        extern crate alloc;
-        mod interrupt;
-        pub mod mcslock;
-        pub mod rwlock;
-        pub use {rwlock::*, mcslock::*};
-        pub mod ticket;
-        pub use ticket::{TicketMutex as Mutex, TicketMutexGuard as MutexGuard};
-    } else if #[cfg(target_os = "none")] {
-        extern crate alloc;
-        mod interrupt;
-        pub mod mcslock;
-        pub mod rwlock;
-        pub use {rwlock::*, mcslock::*};
-        pub mod spin;
-        pub use spin::{SpinMutex as Mutex, SpinMutexGuard as MutexGuard};
-    } else {
-        pub use spin::*;
+    if #[cfg(not(feature = "kernel"))]{
+        pub struct DefaultLockAction;
+        impl LockAction for DefaultLockAction{}
+        pub type TicketDefaultMutex<T> = TicketMutex<T,DefaultLockAction>;
+        pub type SpinDefaultMutex<T> = SpinMutex<T,DefaultLockAction>;
+        pub type RwDefaultLock<T> = RwLock<T,DefaultLockAction>;
     }
+}
+
+/// A trait for lock action
+pub trait LockAction {
+    fn before_lock() {}
+    fn after_lock() {}
 }
