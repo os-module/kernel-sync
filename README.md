@@ -21,22 +21,14 @@ pub trait LockAction {
 
 
 ## Example
+enable LockAction for riscv
+```
+kernel-sync = {path = ".",features = ["riscv"]}
+```
 
 ```rust
-struct KernelLockAction;
-impl LockAction for KernelLockAction {
-    fn before_lock() {
-        
-    }
-    fn after_lock() {
-        
-    }
-}
-
+use kernel_sync::{SpinMutex, TicketMutex, RwLock};
 fn main() {
-    type SpinMutex<T> = kernel_sync::SpinMutex<T, KernelLockAction>;
-    type TicketMutex<T> = kernel_sync::TicketMutex<T, KernelLockAction>;
-    type RwLock<T> = kernel_sync::RwLock<T, KernelLockAction>;
     let x = SpinMutex::new(0);
     *x.lock() = 19;
     assert_eq!(*x.lock(), 19);
