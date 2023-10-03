@@ -5,7 +5,7 @@
 //! latency is infinitely better. Waiting threads simply need to wait for all threads that come before them in the
 //! queue to finish.
 //!
-use crate::LockAction;
+use crate::{EmptyLockAction, LockAction};
 use core::{
     cell::UnsafeCell,
     default::Default,
@@ -23,7 +23,7 @@ use core::{
 /// Ticket locks significantly reduce the worse-case performance of locking at the cost of slightly higher average-time
 /// overhead.
 ///
-pub struct TicketMutex<T: ?Sized, L: LockAction> {
+pub struct TicketMutex<T: ?Sized, L = EmptyLockAction> {
     next_ticket: AtomicUsize,
     next_serving: AtomicUsize,
     _marker: core::marker::PhantomData<L>,
@@ -40,18 +40,18 @@ pub struct TicketMutexGuard<'a, T: ?Sized + 'a, L: LockAction> {
     _marker: core::marker::PhantomData<L>,
 }
 
-unsafe impl<T: ?Sized + Send, L: LockAction> Sync for TicketMutex<T, L> {}
-unsafe impl<T: ?Sized + Send, L: LockAction> Send for TicketMutex<T, L> {}
+unsafe impl<T: ?Sized + Send, L> Sync for TicketMutex<T, L> {}
+unsafe impl<T: ?Sized + Send, L> Send for TicketMutex<T, L> {}
 
-impl<T, L: LockAction> TicketMutex<T, L> {
+impl<T, L> TicketMutex<T, L> {
     /// Creates a new [`TicketMutex`] wrapping the supplied data.
     ///
     /// # Example
     ///
     /// ```
-    /// use kernel_sync::TicketDefaultMutex;
+    /// use kernel_sync::TicketMutex;
     ///
-    /// static MUTEX: TicketDefaultMutex<()> = TicketDefaultMutex::<_>::new(());
+    /// static MUTEX: TicketMutex<()> = TicketMutex::<_>::new(());
     ///
     /// fn demo() {
     ///     let lock = MUTEX.lock();
@@ -73,7 +73,7 @@ impl<T, L: LockAction> TicketMutex<T, L> {
     /// # Example
     ///
     /// ```
-    /// let lock = kernel_sync::TicketDefaultMutex::new(42);
+    /// let lock = kernel_sync::TicketMutex::new(42);
     /// assert_eq!(42, lock.into_inner());
     /// ```
     #[inline(always)]
@@ -89,7 +89,7 @@ impl<T, L: LockAction> TicketMutex<T, L> {
     ///
     /// # Example
     /// ```
-    /// let lock = kernel_sync::TicketDefaultMutex::new(42);
+    /// let lock = kernel_sync::TicketMutex::new(42);
     ///
     /// unsafe {
     ///     core::mem::forget(lock.lock());
@@ -116,7 +116,7 @@ impl<T: ?Sized, L: LockAction> TicketMutex<T, L> {
     /// and the lock will be dropped when the guard falls out of scope.
     ///
     /// ```
-    /// let lock = kernel_sync::TicketDefaultMutex::new(0);
+    /// let lock = kernel_sync::TicketMutex::new(0);
     /// {
     ///     let mut data = lock.lock();
     ///     // The lock is now locked and the data can be accessed
@@ -149,7 +149,7 @@ impl<T: ?Sized, L: LockAction> TicketMutex<T, L> {
     /// # Example
     ///
     /// ```
-    /// let lock = kernel_sync::TicketDefaultMutex::new(42);
+    /// let lock = kernel_sync::TicketMutex::new(42);
     ///
     /// let maybe_guard = lock.try_lock();
     /// assert!(maybe_guard.is_some());
@@ -195,7 +195,7 @@ impl<T: ?Sized, L: LockAction> TicketMutex<T, L> {
     /// # Example
     ///
     /// ```
-    /// let mut lock = kernel_sync::TicketDefaultMutex::new(0);
+    /// let mut lock = kernel_sync::TicketMutex::new(0);
     /// *lock.get_mut() = 10;
     /// assert_eq!(*lock.lock(), 10);
     /// ```
@@ -252,13 +252,13 @@ impl<T: ?Sized + fmt::Debug, L: LockAction> fmt::Debug for TicketMutex<T, L> {
     }
 }
 
-impl<T: ?Sized + Default, L: LockAction> Default for TicketMutex<T, L> {
+impl<T: ?Sized + Default, L> Default for TicketMutex<T, L> {
     fn default() -> Self {
         TicketMutex::new(T::default())
     }
 }
 
-impl<T, L: LockAction> From<T> for TicketMutex<T, L> {
+impl<T, L> From<T> for TicketMutex<T, L> {
     fn from(data: T) -> Self {
         Self::new(data)
     }

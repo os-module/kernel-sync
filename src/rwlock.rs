@@ -1,6 +1,6 @@
 //! A lock that provides data access to either one writer or many readers.
 
-use crate::LockAction;
+use crate::{EmptyLockAction, LockAction};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{
     cell::UnsafeCell,
@@ -44,9 +44,9 @@ use core::{
 /// # Examples
 ///
 /// ```
-/// use kernel_sync::RwDefaultLock;
+/// use kernel_sync::RwLock;
 ///
-/// let lock = RwDefaultLock::new(5);
+/// let lock = RwLock::new(5);
 ///
 /// // many reader locks can be held at once
 /// {
@@ -63,7 +63,7 @@ use core::{
 ///     assert_eq!(*w, 6);
 /// } // write lock is dropped here
 /// ```
-pub struct RwLock<T: ?Sized, L: LockAction> {
+pub struct RwLock<T: ?Sized, L = EmptyLockAction> {
     phantom: PhantomData<L>,
     lock: AtomicUsize,
     data: UnsafeCell<T>,
@@ -106,8 +106,8 @@ pub struct RwLockUpgradableGuard<'a, T: 'a + ?Sized, L: LockAction> {
 }
 
 // Same unsafe impls as `std::sync::RwLock`
-unsafe impl<T: ?Sized + Send, L: LockAction> Send for RwLock<T, L> {}
-unsafe impl<T: ?Sized + Send + Sync, L: LockAction> Sync for RwLock<T, L> {}
+unsafe impl<T: ?Sized + Send, L> Send for RwLock<T, L> {}
+unsafe impl<T: ?Sized + Send + Sync, L> Sync for RwLock<T, L> {}
 
 unsafe impl<T: ?Sized + Send + Sync, L: LockAction> Send for RwLockWriteGuard<'_, T, L> {}
 unsafe impl<T: ?Sized + Send + Sync, L: LockAction> Sync for RwLockWriteGuard<'_, T, L> {}
@@ -118,7 +118,7 @@ unsafe impl<T: ?Sized + Sync, L: LockAction> Sync for RwLockReadGuard<'_, T, L> 
 unsafe impl<T: ?Sized + Send + Sync, L: LockAction> Send for RwLockUpgradableGuard<'_, T, L> {}
 unsafe impl<T: ?Sized + Send + Sync, L: LockAction> Sync for RwLockUpgradableGuard<'_, T, L> {}
 
-impl<T, L: LockAction> RwLock<T, L> {
+impl<T, L> RwLock<T, L> {
     /// Creates a new spinlock wrapping the supplied data.
     ///
     /// May be used statically:
@@ -126,7 +126,7 @@ impl<T, L: LockAction> RwLock<T, L> {
     /// ```
     /// use kernel_sync;
     ///
-    /// static RW_LOCK: kernel_sync::RwDefaultLock<()> = kernel_sync::RwDefaultLock::new(());
+    /// static RW_LOCK: kernel_sync::RwLock<()> = kernel_sync::RwLock::new(());
     ///
     /// fn demo() {
     ///     let lock = RW_LOCK.read();
@@ -161,7 +161,7 @@ impl<T, L: LockAction> RwLock<T, L> {
     ///
     /// # Example
     /// ```
-    /// let lock = kernel_sync::RwDefaultLock::new(42);
+    /// let lock = kernel_sync::RwLock::new(42);
     ///
     /// unsafe {
     ///     core::mem::forget(lock.write());
@@ -195,7 +195,7 @@ impl<T: ?Sized, L: LockAction> RwLock<T, L> {
     /// once it is dropped.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(0);
+    /// let mylock = kernel_sync::RwLock::new(0);
     /// {
     ///     let mut data = mylock.read();
     ///     // The lock is now locked and the data can be read
@@ -225,7 +225,7 @@ impl<T: ?Sized, L: LockAction> RwLock<T, L> {
     /// when dropped.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(0);
+    /// let mylock = kernel_sync::RwLock::new(0);
     /// {
     ///     let mut data = mylock.write();
     ///     // The lock is now locked and the data can be written
@@ -286,7 +286,7 @@ impl<T: ?Sized, L: LockAction> RwLock<T, L> {
     /// or writers will acquire the lock first.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(0);
+    /// let mylock = kernel_sync::RwLock::new(0);
     /// {
     ///     match mylock.try_read() {
     ///         Some(data) => {
@@ -403,7 +403,7 @@ impl<T: ?Sized, L: LockAction> RwLock<T, L> {
     /// returned.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(0);
+    /// let mylock = kernel_sync::RwLock::new(0);
     /// {
     ///     match mylock.try_write() {
     ///         Some(mut data) => {
@@ -455,7 +455,7 @@ impl<T: ?Sized, L: LockAction> RwLock<T, L> {
     /// # Examples
     ///
     /// ```
-    /// let mut lock = kernel_sync::RwDefaultLock::new(0);
+    /// let mut lock = kernel_sync::RwLock::new(0);
     /// *lock.get_mut() = 10;
     /// assert_eq!(*lock.read(), 10);
     /// ```
@@ -477,13 +477,13 @@ impl<T: ?Sized + fmt::Debug, L: LockAction> fmt::Debug for RwLock<T, L> {
     }
 }
 
-impl<T: ?Sized + Default, L: LockAction> Default for RwLock<T, L> {
+impl<T: ?Sized + Default, L> Default for RwLock<T, L> {
     fn default() -> Self {
         Self::new(Default::default())
     }
 }
 
-impl<T, L: LockAction> From<T> for RwLock<T, L> {
+impl<T, L> From<T> for RwLock<T, L> {
     fn from(data: T) -> Self {
         Self::new(data)
     }
@@ -495,7 +495,7 @@ impl<'rwlock, T: ?Sized, L: LockAction> RwLockReadGuard<'rwlock, T, L> {
     /// Note that this function will permanently lock the original lock for all but reading locks.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(0);
+    /// let mylock = kernel_sync::RwLock::new(0);
     ///
     /// let data: &i32 = kernel_sync::RwLockReadGuard::leak(mylock.read());
     ///
@@ -527,7 +527,7 @@ impl<'rwlock, T: ?Sized, L: LockAction> RwLockUpgradableGuard<'rwlock, T, L> {
     /// Upgrades an upgradeable lock guard to a writable lock guard.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(0);
+    /// let mylock = kernel_sync::RwLock::new(0);
     ///
     /// let upgradeable = mylock.upgradeable_read(); // Readable, but not yet writable
     /// let writable = upgradeable.upgrade();
@@ -577,7 +577,7 @@ impl<'rwlock, T: ?Sized, L: LockAction> RwLockUpgradableGuard<'rwlock, T, L> {
     /// Tries to upgrade an upgradeable lock guard to a writable lock guard.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(0);
+    /// let mylock = kernel_sync::RwLock::new(0);
     /// let upgradeable = mylock.upgradeable_read(); // Readable, but not yet writable
     ///
     /// match upgradeable.try_upgrade() {
@@ -603,7 +603,7 @@ impl<'rwlock, T: ?Sized, L: LockAction> RwLockUpgradableGuard<'rwlock, T, L> {
     /// Downgrades the upgradeable lock guard to a readable, shared lock guard. Cannot fail and is guaranteed not to spin.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(1);
+    /// let mylock = kernel_sync::RwLock::new(1);
     ///
     /// let upgradeable = mylock.upgradeable_read();
     /// assert!(mylock.try_read().is_none());
@@ -634,7 +634,7 @@ impl<'rwlock, T: ?Sized, L: LockAction> RwLockUpgradableGuard<'rwlock, T, L> {
     /// Note that this function will permanently lock the original lock.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(0);
+    /// let mylock = kernel_sync::RwLock::new(0);
     ///
     /// let data: &i32 = kernel_sync::RwLockUpgradableGuard::leak(mylock.upgradeable_read());
     ///
@@ -668,7 +668,7 @@ impl<'rwlock, T: ?Sized, L: LockAction> RwLockWriteGuard<'rwlock, T, L> {
     /// Downgrades the writable lock guard to a readable, shared lock guard. Cannot fail and is guaranteed not to spin.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(0);
+    /// let mylock = kernel_sync::RwLock::new(0);
     ///
     /// let mut writable = mylock.write();
     /// *writable = 1;
@@ -697,7 +697,7 @@ impl<'rwlock, T: ?Sized, L: LockAction> RwLockWriteGuard<'rwlock, T, L> {
     /// Downgrades the writable lock guard to an upgradable, shared lock guard. Cannot fail and is guaranteed not to spin.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(0);
+    /// let mylock = kernel_sync::RwLock::new(0);
     ///
     /// let mut writable = mylock.write();
     /// *writable = 1;
@@ -732,7 +732,7 @@ impl<'rwlock, T: ?Sized, L: LockAction> RwLockWriteGuard<'rwlock, T, L> {
     /// Note that this function will permanently lock the original lock.
     ///
     /// ```
-    /// let mylock = kernel_sync::RwDefaultLock::new(0);
+    /// let mylock = kernel_sync::RwLock::new(0);
     ///
     /// let data: &mut i32 = kernel_sync::RwLockWriteGuard::leak(mylock.write());
     ///
@@ -970,7 +970,7 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
 
-    type RwLock<T> = crate::RwDefaultLock<T>;
+    type RwLock<T> = crate::RwLock<T>;
 
     #[derive(Eq, PartialEq, Debug)]
     struct NonCopy(i32);

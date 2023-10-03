@@ -2,6 +2,7 @@
 //!
 //! Waiting threads hammer an atomic variable until it becomes available. Best-case latency is low, but worst-case
 //! latency is theoretically infinite.
+use crate::EmptyLockAction;
 use crate::LockAction;
 use core::{
     cell::UnsafeCell,
@@ -13,9 +14,9 @@ use core::{
 
 /// A [spin lock](https://en.m.wikipedia.org/wiki/Spinlock) providing mutually exclusive access to data.
 ///
-pub struct SpinMutex<T: ?Sized, L: LockAction> {
-    locked: AtomicBool,
+pub struct SpinMutex<T: ?Sized, L = EmptyLockAction> {
     _marker: core::marker::PhantomData<L>,
+    locked: AtomicBool,
     data: UnsafeCell<T>,
 }
 
@@ -24,24 +25,24 @@ pub struct SpinMutex<T: ?Sized, L: LockAction> {
 /// When the guard falls out of scope it will release the lock.
 pub struct SpinMutexGuard<'a, T: ?Sized + 'a, L: LockAction> {
     lock: &'a AtomicBool,
-    data: &'a mut T,
     _marker: core::marker::PhantomData<L>,
+    data: &'a mut T,
 }
 
-unsafe impl<T: ?Sized + Send, L: LockAction> Sync for SpinMutex<T, L> {}
-unsafe impl<T: ?Sized + Send, L: LockAction> Send for SpinMutex<T, L> {}
+unsafe impl<T: ?Sized + Send, L> Sync for SpinMutex<T, L> {}
+unsafe impl<T: ?Sized + Send, L> Send for SpinMutex<T, L> {}
 unsafe impl<T: ?Sized + Sync, L: LockAction> Sync for SpinMutexGuard<'_, T, L> {}
 unsafe impl<T: ?Sized + Send, L: LockAction> Send for SpinMutexGuard<'_, T, L> {}
 
-impl<T, L: LockAction> SpinMutex<T, L> {
+impl<T, L> SpinMutex<T, L> {
     /// Creates a new [`SpinMutex`] wrapping the supplied data.
     ///
     /// # Example
     ///
     /// ```
-    /// use kernel_sync::SpinDefaultMutex;
+    /// use kernel_sync::SpinMutex;
     ///
-    /// static MUTEX: SpinDefaultMutex<()> = SpinDefaultMutex::new(());
+    /// static MUTEX: SpinMutex<()> = SpinMutex::<_>::new(());
     ///
     /// fn demo() {
     ///     let lock = MUTEX.lock();
@@ -63,7 +64,7 @@ impl<T, L: LockAction> SpinMutex<T, L> {
     /// # Example
     ///
     /// ```
-    /// let lock = kernel_sync::SpinDefaultMutex::new(42);
+    /// let lock = kernel_sync::SpinMutex::<_>::new(42);
     /// assert_eq!(42, lock.into_inner());
     /// ```
     #[inline(always)]
@@ -79,7 +80,7 @@ impl<T, L: LockAction> SpinMutex<T, L> {
     ///
     /// # Example
     /// ```
-    /// let lock = kernel_sync::SpinDefaultMutex::new(42);
+    /// let lock = kernel_sync::SpinMutex::<_>::new(42);
     ///
     /// unsafe {
     ///     core::mem::forget(lock.lock());
@@ -106,7 +107,7 @@ impl<T: ?Sized, L: LockAction> SpinMutex<T, L> {
     /// and the lock will be dropped when the guard falls out of scope.
     ///
     /// ```
-    /// let lock = kernel_sync::SpinDefaultMutex::new(0);
+    /// let lock = kernel_sync::SpinMutex::<_>::new(0);
     /// {
     ///     let mut data = lock.lock();
     ///     // The lock is now locked and the data can be accessed
@@ -138,7 +139,7 @@ impl<T: ?Sized, L: LockAction> SpinMutex<T, L> {
     /// # Example
     ///
     /// ```
-    /// let lock = kernel_sync::SpinDefaultMutex::new(42);
+    /// let lock = kernel_sync::SpinMutex::<_>::new(42);
     ///
     /// let maybe_guard = lock.try_lock();
     /// assert!(maybe_guard.is_some());
@@ -175,7 +176,7 @@ impl<T: ?Sized, L: LockAction> SpinMutex<T, L> {
     /// # Example
     ///
     /// ```
-    /// let mut lock = kernel_sync::SpinDefaultMutex::new(0);
+    /// let mut lock = kernel_sync::SpinMutex::<_>::new(0);
     /// *lock.get_mut() = 10;
     /// assert_eq!(*lock.lock(), 10);
     /// ```
@@ -221,13 +222,13 @@ impl<T: ?Sized + fmt::Debug, L: LockAction> fmt::Debug for SpinMutex<T, L> {
     }
 }
 
-impl<T: ?Sized + Default, L: LockAction> Default for SpinMutex<T, L> {
+impl<T: ?Sized + Default, L> Default for SpinMutex<T, L> {
     fn default() -> Self {
         SpinMutex::new(T::default())
     }
 }
 
-impl<T, L: LockAction> From<T> for SpinMutex<T, L> {
+impl<T, L> From<T> for SpinMutex<T, L> {
     fn from(data: T) -> Self {
         Self::new(data)
     }
