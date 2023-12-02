@@ -3,6 +3,10 @@
 extern crate alloc;
 pub mod rwlock;
 
+mod arcrcu;
+pub mod rculock;
+pub use rculock::*;
+
 pub use rwlock::*;
 pub mod ticket;
 pub use ticket::*;
@@ -32,6 +36,11 @@ cfg_if::cfg_if! {
         pub type RwLockReadGuard<'a, T> = crate::rwlock::RwLockReadGuard<'a, T,EmptyLockAction>;
         pub type RwLockWriteGuard<'a, T> = crate::rwlock::RwLockWriteGuard<'a, T,EmptyLockAction>;
         pub type RwLockUpgradableReadGuard<'a, T> = crate::rwlock::RwLockUpgradableGuard<'a, T,EmptyLockAction>;
+
+        // 测试用，之后删除
+        pub type RcuLock<T> = crate::rculock::RcuLock<T, EmptyLockAction, EmptyLockAction>;
+        pub type RcuLockReadGuard<'a, T> = crate::rculock::RcuLockReadGuard<'a, T, EmptyLockAction>;
+        pub type RcuLockWriteGuard<'a, T> = crate::rculock::RcuLockWriteGuard<'a, T, EmptyLockAction>;
     }
 }
 

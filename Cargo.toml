@@ -17,5 +17,5 @@ lockapi = ['lock_api']
 riscv = ["dep:riscv"]
 
 [dev-dependencies]
-kernel-sync = {path = ".",features = ["riscv"]}
-
+# kernel-sync = {path = ".",features = ["riscv"]}
+kernel-sync = {path = "."}
