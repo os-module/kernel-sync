@@ -1,14 +1,13 @@
 ﻿//! 基于ArcRcu类型的，和RwLock相似的锁。允许读者和写者同时访问。
 
 use core::{marker::PhantomData, ops::{Deref, DerefMut}};
-
-use alloc::rc::Rc;
-
+use core::mem::swap;
+use core::sync::atomic::Ordering;
 use crate::{arcrcu::{ArcRcu, Guard}, LockAction};
 
 /// 对ArcRcu的包装，使得其提供和RwLock相似的接口
 /// R代表读取数据前后，内核需要执行的操作；W代表写入数据前后，内核需要执行的操作
-/// Todo：添加对?Sized的支持
+/// SAFETY: W中的after_lock函数需要等待写者前的所有读者结束，这样才能正常释放旧版本数据的空间。
 pub struct RcuLock<T: Clone, R: LockAction, W: LockAction> {
     phantom_r: PhantomData<R>,
     phantom_w: PhantomData<W>,
@@ -53,8 +52,8 @@ impl<T: Clone, R: LockAction, W: LockAction> RcuLock<T, R, W> {
                 Some(guard) => {
                     return RcuLockWriteGuard {
                         phantom: PhantomData,
-                        data: guard,
-                        rcu: self.rcu.clone(),
+                        data: Some(guard),
+                        rcu: &self.rcu,
                     }
                 },
                 None => {
@@ -70,8 +69,8 @@ impl<T: Clone, R: LockAction, W: LockAction> RcuLock<T, R, W> {
             Some(guard) => {
                 Some(RcuLockWriteGuard {
                     phantom: PhantomData,
-                    data: guard,
-                    rcu: self.rcu.clone(),
+                    data: Some(guard),
+                    rcu: &self.rcu,
                 })
             },
             None => {
@@ -104,32 +103,52 @@ impl<'a, T: Clone, R: LockAction> Drop for RcuLockReadGuard<'a, T, R> {
 
 pub struct RcuLockWriteGuard<'a, T: Clone, W: LockAction> {
     phantom: PhantomData<W>,
-    data: Guard<'a, T>,
+    data: Option<Guard<'a, T>>,
     /// 这个Guard所属的RCU
-    rcu: ArcRcu<T>,
+    rcu: &'a ArcRcu<T>,
 }
 
 impl<'a, T: Clone, W: LockAction> Deref for RcuLockWriteGuard<'a, T, W> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &*(self.data)
+        match &self.data {
+            Some(guard) => {
+                &*guard
+            },
+            None => {
+                panic!("unreachable76543212345");
+            }
+        }
     }
 }
 
 impl<'a, T: Clone, W: LockAction> DerefMut for RcuLockWriteGuard<'a, T, W> {
 
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *(self.data)
+        match &mut self.data {
+            Some(guard) => {
+                &mut *guard
+            },
+            None => {
+                panic!("unreachable0989876678");
+            }
+        }
     }
 }
 
 impl<'a, T: Clone, W: LockAction> Drop for RcuLockWriteGuard<'a, T, W> {
     fn drop(&mut self) {
+        // 需要提前释放guard，这样才能使更改生效
+        let mut guard: Option<Guard<T>> = None;
+        swap(&mut guard, &mut (self.data));
+        drop(guard.unwrap());
         // 调用after_lock函数，等待在此之前的所有读者执行完毕
         W::after_lock();
         // 清理之前的版本
         self.rcu.clean();
+        // 释放写者锁
+        self.rcu.inner.am_writing.store(false, Ordering::Relaxed);
     }
 }
 

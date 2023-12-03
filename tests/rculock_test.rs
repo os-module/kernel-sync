@@ -1,7 +1,4 @@
 ﻿extern crate alloc;
-use std::default;
-
-use alloc::sync::Arc;
 use alloc::vec;
 use kernel_sync::RcuLock;
 
@@ -9,8 +6,8 @@ use kernel_sync::RcuLock;
 fn basic_test() {
     let x = RcuLock::new(0);
     let thread_cnt = 3;
-    // let loop_cnt = 1000000;
-    let loop_cnt = 100;
+    let loop_cnt = 1000000;
+    // let loop_cnt = 100;
     let mut threads = vec![];
     for _ in 0..thread_cnt {
         let x_clone = x.clone();
@@ -43,20 +40,10 @@ fn try_lock_test() {
     assert!(lock_result2.is_some());
 }
 
-/// 如果读者和写者不会相互阻塞，大概会看到如下的输出：
-///     running 1 test
-///     thread0 starts.
-///     thread1 starts.
-///     thread2 starts.
-///     read_2 = 0
-///     thread1 ends.
-///     read_3 = 1
-///     thread2 ends.
-///     thread0 ends.
 #[test]
 fn read_write_test() {
     let x = RcuLock::new(0);
-    let thread_cnt = 3;
+    let thread_cnt = 4;
     // let loop_cnt = 1000000;
     // let loop_cnt = 100;
     let mut threads = vec![];
@@ -80,6 +67,7 @@ fn read_write_test() {
                     assert_eq!(*write_1, 1);
                     std::thread::sleep(std::time::Duration::from_secs(4));
                     assert_eq!(*write_1, 1);
+                    // std::thread::sleep(std::time::Duration::from_secs(4));
                     std::println!("thread1 ends.");
                 },
                 2 => {
@@ -87,14 +75,21 @@ fn read_write_test() {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     let read_2 = &*x_clone.read();
                     std::println!("read_2 = {read_2}");
-                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    std::thread::sleep(std::time::Duration::from_secs(7));
                     let read_3 = &*x_clone.read();
                     std::println!("read_3 = {read_3}");
                     std::println!("thread2 ends.");
                 },
-                _ => {
-
-                }
+                3 => {
+                    std::println!("thread3 starts.");
+                    std::thread::sleep(std::time::Duration::from_secs(4));
+                    let write_4 = &mut *x_clone.write();
+                    *write_4 += 1;
+                    assert_eq!(*write_4, 2);
+                    // std::thread::sleep(std::time::Duration::from_secs(6));
+                    std::println!("thread3 ends.");
+                },
+                _ => {},
             }
         }));
     }

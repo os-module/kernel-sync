@@ -2,6 +2,7 @@
 use core::{ops, borrow, ptr, mem};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use std::fmt::Debug;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 
@@ -26,8 +27,10 @@ use alloc::sync::Arc;
 /// assert_eq!(*x, 7); // but the pointer now points to the new value.
 /// assert_eq!(*z, 7); // but the cloned pointer also points to the new value.
 /// ```
+/// 
+/// Todo：改一下borrow_count机制，现在只要有读者或写者在占用这个锁，就无法释放旧版本的数据。需要改成Grace Period那样的。
 pub struct ArcRcu<T> {
-    inner: Arc<Inner<T>>,
+    pub inner: Arc<Inner<T>>,
     have_borrowed: Cell<bool>,
 }
 unsafe impl<T: Send + Sync> Send for ArcRcu<T> {}
@@ -42,9 +45,10 @@ impl<T: Clone> Clone for ArcRcu<T> {
 }
 pub struct Inner<T> {
     borrow_count: AtomicUsize,
-    am_writing: AtomicBool,
+    pub am_writing: AtomicBool,
     list: List<T>,
 }
+
 pub struct List<T> {
     value: UnsafeCell<T>,
     next: AtomicPtr<List<T>>,
@@ -79,6 +83,13 @@ impl<T> Drop for List<T> {
         }
     }
 }
+
+impl<T> Debug for List<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("List").field("next", &self.next).finish()
+    }
+}
+
 impl<'a, T: Clone> ArcRcu<T> {
     pub fn new(x: T) -> Self {
         ArcRcu {
@@ -107,7 +118,7 @@ impl<'a, T: Clone> ArcRcu<T> {
             })
         }
     }
-    pub fn clean(&mut self) {
+    pub fn clean(&self) {
         let aleady_borrowed = self.have_borrowed.get();
         if aleady_borrowed {
             self.inner.borrow_count.fetch_sub(1, Ordering::Relaxed);
@@ -115,7 +126,10 @@ impl<'a, T: Clone> ArcRcu<T> {
         }
         let borrow_count = self.inner.borrow_count.load(Ordering::Relaxed);
         let next = self.inner.list.next.load(Ordering::Acquire);
-        if borrow_count == 0 && next != null_mut() {
+        std::println!("clean?");
+        // if borrow_count == 0 && next != null_mut() {
+        if next != null_mut() {
+            std::println!("clean.");
             unsafe {
                 // make a copy of the old datum that we will need to free
                 let buffer: UnsafeCell<Option<T>> = UnsafeCell::new(None);
@@ -124,15 +138,21 @@ impl<'a, T: Clone> ArcRcu<T> {
                     buffer.get() as *mut T,
                     1,
                 );
+                // std::println!("clean 1");
                 // now copy the "good" value to the main spot
                 ptr::copy_nonoverlapping((*next).value.get(), self.inner.list.value.get(), 1);
+                // std::println!("clean 2");
                 // Now we can set the pointer to null which activates
                 // the copy we just made.
                 let _to_be_freed =
                     Box::from_raw(self.inner.list.next.swap(null_mut(), Ordering::Release));
+                // std::println!("{:?}", _to_be_freed);
                 ptr::copy_nonoverlapping(buffer.get() as *mut T, (*next).value.get(), 1);
+                // std::println!("clean 3");
                 let buffer_copy: UnsafeCell<Option<T>> = UnsafeCell::new(None);
                 ptr::copy_nonoverlapping(buffer_copy.get(), buffer.get(), 1);
+                // std::println!("clean 4");
+                // std::println!("{:?}", _to_be_freed);
             }
         }
     }
@@ -168,6 +188,6 @@ impl<'a, T: Clone> Drop for Guard<'a, T> {
             .list
             .next
             .store(Box::into_raw(Box::new(list.unwrap())), Ordering::Release);
-        self.rc_guts.am_writing.store(false, Ordering::Relaxed);
+        // self.rc_guts.am_writing.store(false, Ordering::Relaxed);
     }
 }
