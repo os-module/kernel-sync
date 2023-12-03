@@ -39,9 +39,15 @@ impl<T: Clone, R: LockAction, W: LockAction> RcuLock<T, R, W> {
     /// read必定成功，因此没有try_read
     pub fn read(&self) -> RcuLockReadGuard<T, R> {
         R::before_lock();
+        let index = self.rcu.inner.current_borrow_count_index.load(Ordering::Acquire);
+        self.rcu.inner.borrow_count[index].fetch_add(1, Ordering::AcqRel);
+        // let count = self.rcu.inner.borrow_count[index].load(Ordering::Acquire);
+        // std::println!("read, index = {index}, count = {} -> {count}", count - 1);
         RcuLockReadGuard {
             phantom: PhantomData,
             data: &*(self.rcu),
+            rcu: &self.rcu,
+            borrow_count_index: index,
         }
     }
 
@@ -50,10 +56,15 @@ impl<T: Clone, R: LockAction, W: LockAction> RcuLock<T, R, W> {
         loop {
             match self.rcu.try_update() {
                 Some(guard) => {
+                    let index = self.rcu.inner.current_borrow_count_index.load(Ordering::Acquire);
+                    self.rcu.inner.borrow_count[index].fetch_add(1, Ordering::AcqRel);
+                    // let count = self.rcu.inner.borrow_count[index].load(Ordering::Acquire);
+                    // std::println!("write, index = {index}, count = {} -> {count}", count - 1);
                     return RcuLockWriteGuard {
                         phantom: PhantomData,
                         data: Some(guard),
                         rcu: &self.rcu,
+                        borrow_count_index: index,
                     }
                 },
                 None => {
@@ -67,10 +78,15 @@ impl<T: Clone, R: LockAction, W: LockAction> RcuLock<T, R, W> {
         W::before_lock();
         match self.rcu.try_update() {
             Some(guard) => {
+                let index = self.rcu.inner.current_borrow_count_index.load(Ordering::Acquire);
+                self.rcu.inner.borrow_count[index].fetch_add(1, Ordering::AcqRel);
+                // let count = self.rcu.inner.borrow_count[index].load(Ordering::Acquire);
+                // std::println!("try_write, index = {index}, count = {} -> {count}", count - 1);
                 Some(RcuLockWriteGuard {
                     phantom: PhantomData,
                     data: Some(guard),
                     rcu: &self.rcu,
+                    borrow_count_index: index,
                 })
             },
             None => {
@@ -85,6 +101,8 @@ impl<T: Clone, R: LockAction, W: LockAction> RcuLock<T, R, W> {
 pub struct RcuLockReadGuard<'a, T: Clone, R: LockAction> {
     phantom: PhantomData<R>,
     data: &'a T,
+    rcu: &'a ArcRcu<T>,
+    borrow_count_index: usize,
 }
 
 impl<'a, T: Clone, R: LockAction> Deref for RcuLockReadGuard<'a, T, R> {
@@ -97,6 +115,9 @@ impl<'a, T: Clone, R: LockAction> Deref for RcuLockReadGuard<'a, T, R> {
 
 impl<'a, T: Clone, R: LockAction> Drop for RcuLockReadGuard<'a, T, R> {
     fn drop(&mut self) {
+        self.rcu.inner.borrow_count[self.borrow_count_index].fetch_sub(1, Ordering::AcqRel);
+        // let count = self.rcu.inner.borrow_count[self.borrow_count_index].load(Ordering::Acquire);
+        // std::println!("read drop, index = {}, count = {} -> {count}", self.borrow_count_index, count + 1);
         R::after_lock();
     }
 }
@@ -106,6 +127,7 @@ pub struct RcuLockWriteGuard<'a, T: Clone, W: LockAction> {
     data: Option<Guard<'a, T>>,
     /// 这个Guard所属的RCU
     rcu: &'a ArcRcu<T>,
+    borrow_count_index: usize,
 }
 
 impl<'a, T: Clone, W: LockAction> Deref for RcuLockWriteGuard<'a, T, W> {
@@ -143,12 +165,22 @@ impl<'a, T: Clone, W: LockAction> Drop for RcuLockWriteGuard<'a, T, W> {
         let mut guard: Option<Guard<T>> = None;
         swap(&mut guard, &mut (self.data));
         drop(guard.unwrap());
-        // 调用after_lock函数，等待在此之前的所有读者执行完毕
-        W::after_lock();
+        // 将current_borrow_count_index在0和1间切换
+        // 这样，更新数据后的读取就不会影响到这个引用计数了
+        self.rcu.inner.current_borrow_count_index.fetch_xor(1, Ordering::AcqRel);
+        // 下降引用计数
+        self.rcu.inner.borrow_count[self.borrow_count_index].fetch_sub(1, Ordering::AcqRel);
+        // let count = self.rcu.inner.borrow_count[self.borrow_count_index].load(Ordering::Acquire);
+        // std::println!("write drop, index = {}, count = {} -> {count}", self.borrow_count_index, count + 1);
+        // 等待在此之前的所有读者执行完毕
+        while self.rcu.inner.borrow_count[self.borrow_count_index].load(Ordering::Acquire) > 0 {
+            core::hint::spin_loop();
+        }
         // 清理之前的版本
         self.rcu.clean();
         // 释放写者锁
         self.rcu.inner.am_writing.store(false, Ordering::Relaxed);
+        W::after_lock();
     }
 }
 

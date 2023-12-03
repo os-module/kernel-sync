@@ -53,40 +53,50 @@ fn read_write_test() {
             match i {
                 0 => {
                     std::println!("thread0 starts.");
-                    let read_0 = &*x_clone.read();
+                    let x = x_clone.read();
+                    let read_0 = &*x;
                     assert_eq!(*read_0, 0);
                     std::thread::sleep(std::time::Duration::from_secs(10));
                     assert_eq!(*read_0, 0);
+                    drop(x);
                     std::println!("thread0 ends.");
                 },
                 1 => {
                     std::println!("thread1 starts.");
                     std::thread::sleep(std::time::Duration::from_secs(3));
-                    let write_1 = &mut *x_clone.write();
+                    let mut x = x_clone.write();
+                    let write_1 = &mut *x;
                     *write_1 = 1;
                     assert_eq!(*write_1, 1);
                     std::thread::sleep(std::time::Duration::from_secs(4));
                     assert_eq!(*write_1, 1);
                     // std::thread::sleep(std::time::Duration::from_secs(4));
+                    drop(x);
                     std::println!("thread1 ends.");
                 },
                 2 => {
                     std::println!("thread2 starts.");
                     std::thread::sleep(std::time::Duration::from_secs(5));
-                    let read_2 = &*x_clone.read();
+                    let x1 = x_clone.read();
+                    let read_2 = &*x1;
                     std::println!("read_2 = {read_2}");
                     std::thread::sleep(std::time::Duration::from_secs(7));
-                    let read_3 = &*x_clone.read();
+                    let x2 = x_clone.read();
+                    let read_3 = &*x2;
                     std::println!("read_3 = {read_3}");
+                    drop(x1);
+                    drop(x2);
                     std::println!("thread2 ends.");
                 },
                 3 => {
                     std::println!("thread3 starts.");
                     std::thread::sleep(std::time::Duration::from_secs(4));
-                    let write_4 = &mut *x_clone.write();
+                    let mut x = x_clone.write();
+                    let write_4 = &mut *x;
                     *write_4 += 1;
                     assert_eq!(*write_4, 2);
                     // std::thread::sleep(std::time::Duration::from_secs(6));
+                    drop(x);
                     std::println!("thread3 ends.");
                 },
                 _ => {},

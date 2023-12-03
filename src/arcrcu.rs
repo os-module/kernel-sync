@@ -31,7 +31,6 @@ use alloc::sync::Arc;
 /// Todo：改一下borrow_count机制，现在只要有读者或写者在占用这个锁，就无法释放旧版本的数据。需要改成Grace Period那样的。
 pub struct ArcRcu<T> {
     pub inner: Arc<Inner<T>>,
-    have_borrowed: Cell<bool>,
 }
 unsafe impl<T: Send + Sync> Send for ArcRcu<T> {}
 unsafe impl<T: Send + Sync> Sync for ArcRcu<T> {}
@@ -39,12 +38,12 @@ impl<T: Clone> Clone for ArcRcu<T> {
     fn clone(&self) -> Self {
         ArcRcu {
             inner: self.inner.clone(),
-            have_borrowed: Cell::new(false),
         }
     }
 }
 pub struct Inner<T> {
-    borrow_count: AtomicUsize,
+    pub borrow_count: [AtomicUsize; 2],
+    pub current_borrow_count_index: AtomicUsize,
     pub am_writing: AtomicBool,
     list: List<T>,
 }
@@ -57,11 +56,11 @@ pub struct List<T> {
 impl<T> ops::Deref for ArcRcu<T> {
     type Target = T;
     fn deref(&self) -> &T {
-        let aleady_borrowed = self.have_borrowed.get();
-        if !aleady_borrowed {
-            self.inner.borrow_count.fetch_add(1, Ordering::Relaxed);
-            self.have_borrowed.set(true); // indicate we have borrowed this once.
-        }
+        // let aleady_borrowed = self.have_borrowed.get();
+        // if !aleady_borrowed {
+        //     self.inner.borrow_count.fetch_add(1, Ordering::Relaxed);
+        //     self.have_borrowed.set(true); // indicate we have borrowed this once.
+        // }
         let next = self.inner.list.next.load(Ordering::Acquire);
         if next == null_mut() {
             unsafe { &*self.inner.list.value.get() }
@@ -93,9 +92,10 @@ impl<T> Debug for List<T> {
 impl<'a, T: Clone> ArcRcu<T> {
     pub fn new(x: T) -> Self {
         ArcRcu {
-            have_borrowed: Cell::new(false),
+            // have_borrowed: Cell::new(false),
             inner: Arc::new(Inner {
-                borrow_count: AtomicUsize::new(0),
+                borrow_count: [AtomicUsize::new(0), AtomicUsize::new(0)],
+                current_borrow_count_index: AtomicUsize::new(0),
                 am_writing: AtomicBool::new(false),
                 list: List {
                     value: UnsafeCell::new(x),
@@ -119,17 +119,17 @@ impl<'a, T: Clone> ArcRcu<T> {
         }
     }
     pub fn clean(&self) {
-        let aleady_borrowed = self.have_borrowed.get();
-        if aleady_borrowed {
-            self.inner.borrow_count.fetch_sub(1, Ordering::Relaxed);
-            self.have_borrowed.set(false); // indicate we have no longer borrowed this.
-        }
-        let borrow_count = self.inner.borrow_count.load(Ordering::Relaxed);
+        // let aleady_borrowed = self.have_borrowed.get();
+        // if aleady_borrowed {
+        //     self.inner.borrow_count.fetch_sub(1, Ordering::Relaxed);
+        //     self.have_borrowed.set(false); // indicate we have no longer borrowed this.
+        // }
+        // let borrow_count = self.inner.borrow_count.load(Ordering::Relaxed);
         let next = self.inner.list.next.load(Ordering::Acquire);
-        std::println!("clean?");
+        // std::println!("clean?");
         // if borrow_count == 0 && next != null_mut() {
         if next != null_mut() {
-            std::println!("clean.");
+            // std::println!("clean.");
             unsafe {
                 // make a copy of the old datum that we will need to free
                 let buffer: UnsafeCell<Option<T>> = UnsafeCell::new(None);
