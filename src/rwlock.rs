@@ -1,6 +1,6 @@
 //! A lock that provides data access to either one writer or many readers.
 
-use crate::{EmptyLockAction, LockAction};
+use crate::{LockAction};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{
     cell::UnsafeCell,
@@ -63,7 +63,7 @@ use core::{
 ///     assert_eq!(*w, 6);
 /// } // write lock is dropped here
 /// ```
-pub struct RwLock<T: ?Sized, L = EmptyLockAction> {
+pub struct RwLock<T: ?Sized, L:LockAction> {
     phantom: PhantomData<L>,
     lock: AtomicUsize,
     data: UnsafeCell<T>,
@@ -106,8 +106,8 @@ pub struct RwLockUpgradableGuard<'a, T: 'a + ?Sized, L: LockAction> {
 }
 
 // Same unsafe impls as `std::sync::RwLock`
-unsafe impl<T: ?Sized + Send, L> Send for RwLock<T, L> {}
-unsafe impl<T: ?Sized + Send + Sync, L> Sync for RwLock<T, L> {}
+unsafe impl<T: ?Sized + Send, L:LockAction> Send for RwLock<T, L> {}
+unsafe impl<T: ?Sized + Send + Sync, L:LockAction> Sync for RwLock<T, L> {}
 
 unsafe impl<T: ?Sized + Send + Sync, L: LockAction> Send for RwLockWriteGuard<'_, T, L> {}
 unsafe impl<T: ?Sized + Send + Sync, L: LockAction> Sync for RwLockWriteGuard<'_, T, L> {}
@@ -118,13 +118,14 @@ unsafe impl<T: ?Sized + Sync, L: LockAction> Sync for RwLockReadGuard<'_, T, L> 
 unsafe impl<T: ?Sized + Send + Sync, L: LockAction> Send for RwLockUpgradableGuard<'_, T, L> {}
 unsafe impl<T: ?Sized + Send + Sync, L: LockAction> Sync for RwLockUpgradableGuard<'_, T, L> {}
 
-impl<T, L> RwLock<T, L> {
+impl<T, L:LockAction> RwLock<T, L> {
     /// Creates a new spinlock wrapping the supplied data.
     ///
     /// May be used statically:
     ///
     /// ```
     /// use kernel_sync;
+    /// use kernel_sync::EmptyLockAction;
     ///
     /// static RW_LOCK: kernel_sync::RwLock<()> = kernel_sync::RwLock::new(());
     ///
@@ -470,20 +471,20 @@ impl<T: ?Sized + fmt::Debug, L: LockAction> fmt::Debug for RwLock<T, L> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.try_read() {
             Some(guard) => write!(f, "RwLock {{ data: ")
-                .and_then(|()| (&*guard).fmt(f))
+                .and_then(|()| (*guard).fmt(f))
                 .and_then(|()| write!(f, "}}")),
             None => write!(f, "RwLock {{ <locked> }}"),
         }
     }
 }
 
-impl<T: ?Sized + Default, L> Default for RwLock<T, L> {
+impl<T: ?Sized + Default, L:LockAction> Default for RwLock<T, L> {
     fn default() -> Self {
         Self::new(Default::default())
     }
 }
 
-impl<T, L> From<T> for RwLock<T, L> {
+impl<T, L:LockAction> From<T> for RwLock<T, L> {
     fn from(data: T) -> Self {
         Self::new(data)
     }
@@ -848,6 +849,7 @@ fn compare_exchange(
 
 #[cfg(feature = "lockapi")]
 unsafe impl<L: LockAction> lock_api::RawRwLock for RwLock<(), L> {
+    #[allow(clippy::declare_interior_mutable_const)]
     const INIT: Self = Self::new(());
 
     type GuardMarker = lock_api::GuardSend;
@@ -861,7 +863,7 @@ unsafe impl<L: LockAction> lock_api::RawRwLock for RwLock<(), L> {
     #[inline(always)]
     fn try_lock_shared(&self) -> bool {
         // Prevent guard destructor running
-        self.try_read().map(|g| core::mem::forget(g)).is_some()
+        self.try_read().map(core::mem::forget).is_some()
     }
 
     #[inline(always)]
@@ -882,7 +884,7 @@ unsafe impl<L: LockAction> lock_api::RawRwLock for RwLock<(), L> {
     #[inline(always)]
     fn try_lock_exclusive(&self) -> bool {
         // Prevent guard destructor running
-        self.try_write().map(|g| core::mem::forget(g)).is_some()
+        self.try_write().map(core::mem::forget).is_some()
     }
 
     #[inline(always)]
@@ -912,7 +914,7 @@ unsafe impl<L: LockAction> lock_api::RawRwLockUpgrade for RwLock<(), L> {
     fn try_lock_upgradable(&self) -> bool {
         // Prevent guard destructor running
         self.try_upgradeable_read()
-            .map(|g| core::mem::forget(g))
+            .map(core::mem::forget)
             .is_some()
     }
 
@@ -944,7 +946,7 @@ unsafe impl<L: LockAction> lock_api::RawRwLockUpgrade for RwLock<(), L> {
         };
         tmp_guard
             .try_upgrade()
-            .map(|g| core::mem::forget(g))
+            .map(core::mem::forget)
             .is_ok()
     }
 }
@@ -1026,7 +1028,7 @@ mod tests {
     fn test_rw_access_in_unwind() {
         let arc = Arc::new(RwLock::new(1));
         let arc2 = arc.clone();
-        let _ = thread::spawn(move || -> () {
+        let _ = thread::spawn(move || {
             struct Unwinder {
                 i: Arc<RwLock<isize>>,
             }
@@ -1065,8 +1067,7 @@ mod tests {
         let write_result = lock.try_write();
         match write_result {
             None => (),
-            Some(_) => assert!(
-                false,
+            Some(_) => panic!(
                 "try_write should not succeed while read_guard is in scope"
             ),
         }

@@ -2,7 +2,6 @@
 //!
 //! Waiting threads hammer an atomic variable until it becomes available. Best-case latency is low, but worst-case
 //! latency is theoretically infinite.
-use crate::EmptyLockAction;
 use crate::LockAction;
 use core::{
     cell::UnsafeCell,
@@ -14,7 +13,7 @@ use core::{
 
 /// A [spin lock](https://en.m.wikipedia.org/wiki/Spinlock) providing mutually exclusive access to data.
 ///
-pub struct SpinMutex<T: ?Sized, L = EmptyLockAction> {
+pub struct SpinMutex<T: ?Sized, L:LockAction> {
     _marker: core::marker::PhantomData<L>,
     locked: AtomicBool,
     data: UnsafeCell<T>,
@@ -29,20 +28,20 @@ pub struct SpinMutexGuard<'a, T: ?Sized + 'a, L: LockAction> {
     data: &'a mut T,
 }
 
-unsafe impl<T: ?Sized + Send, L> Sync for SpinMutex<T, L> {}
-unsafe impl<T: ?Sized + Send, L> Send for SpinMutex<T, L> {}
+unsafe impl<T: ?Sized + Send, L:LockAction> Sync for SpinMutex<T, L> {}
+unsafe impl<T: ?Sized + Send, L:LockAction> Send for SpinMutex<T, L> {}
 unsafe impl<T: ?Sized + Sync, L: LockAction> Sync for SpinMutexGuard<'_, T, L> {}
 unsafe impl<T: ?Sized + Send, L: LockAction> Send for SpinMutexGuard<'_, T, L> {}
 
-impl<T, L> SpinMutex<T, L> {
+impl<T, L:LockAction> SpinMutex<T, L> {
     /// Creates a new [`SpinMutex`] wrapping the supplied data.
     ///
     /// # Example
     ///
     /// ```
-    /// use kernel_sync::SpinMutex;
+    /// use kernel_sync::{EmptyLockAction, SpinMutex};
     ///
-    /// static MUTEX: SpinMutex<()> = SpinMutex::<_>::new(());
+    /// static MUTEX: SpinMutex<()> = SpinMutex::new(());
     ///
     /// fn demo() {
     ///     let lock = MUTEX.lock();
@@ -215,20 +214,20 @@ impl<T: ?Sized + fmt::Debug, L: LockAction> fmt::Debug for SpinMutex<T, L> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.try_lock() {
             Some(guard) => write!(f, "Mutex {{ data: ")
-                .and_then(|()| (&*guard).fmt(f))
+                .and_then(|()| (*guard).fmt(f))
                 .and_then(|()| write!(f, "}}")),
             None => write!(f, "Mutex {{ <locked> }}"),
         }
     }
 }
 
-impl<T: ?Sized + Default, L> Default for SpinMutex<T, L> {
+impl<T: ?Sized + Default, L:LockAction> Default for SpinMutex<T, L> {
     fn default() -> Self {
         SpinMutex::new(T::default())
     }
 }
 
-impl<T, L> From<T> for SpinMutex<T, L> {
+impl<T, L:LockAction> From<T> for SpinMutex<T, L> {
     fn from(data: T) -> Self {
         Self::new(data)
     }
@@ -269,6 +268,7 @@ impl<'a, T: ?Sized + fmt::Display, L: LockAction> fmt::Display for SpinMutexGuar
 
 #[cfg(feature = "lockapi")]
 unsafe impl<L: LockAction> lock_api::RawMutex for SpinMutex<(), L> {
+    #[allow(clippy::declare_interior_mutable_const)]
     const INIT: Self = Self::new(());
     type GuardMarker = lock_api::GuardSend;
 

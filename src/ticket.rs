@@ -5,7 +5,7 @@
 //! latency is infinitely better. Waiting threads simply need to wait for all threads that come before them in the
 //! queue to finish.
 //!
-use crate::{EmptyLockAction, LockAction};
+use crate::{LockAction};
 use core::{
     cell::UnsafeCell,
     default::Default,
@@ -23,7 +23,7 @@ use core::{
 /// Ticket locks significantly reduce the worse-case performance of locking at the cost of slightly higher average-time
 /// overhead.
 ///
-pub struct TicketMutex<T: ?Sized, L = EmptyLockAction> {
+pub struct TicketMutex<T: ?Sized, L:LockAction> {
     next_ticket: AtomicUsize,
     next_serving: AtomicUsize,
     _marker: core::marker::PhantomData<L>,
@@ -40,10 +40,10 @@ pub struct TicketMutexGuard<'a, T: ?Sized + 'a, L: LockAction> {
     _marker: core::marker::PhantomData<L>,
 }
 
-unsafe impl<T: ?Sized + Send, L> Sync for TicketMutex<T, L> {}
-unsafe impl<T: ?Sized + Send, L> Send for TicketMutex<T, L> {}
+unsafe impl<T: ?Sized + Send, L:LockAction> Sync for TicketMutex<T, L> {}
+unsafe impl<T: ?Sized + Send, L:LockAction> Send for TicketMutex<T, L> {}
 
-impl<T, L> TicketMutex<T, L> {
+impl<T, L:LockAction> TicketMutex<T, L> {
     /// Creates a new [`TicketMutex`] wrapping the supplied data.
     ///
     /// # Example
@@ -245,20 +245,20 @@ impl<T: ?Sized + fmt::Debug, L: LockAction> fmt::Debug for TicketMutex<T, L> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.try_lock() {
             Some(guard) => write!(f, "Mutex {{ data: ")
-                .and_then(|()| (&*guard).fmt(f))
+                .and_then(|()| (*guard).fmt(f))
                 .and_then(|()| write!(f, "}}")),
             None => write!(f, "Mutex {{ <locked> }}"),
         }
     }
 }
 
-impl<T: ?Sized + Default, L> Default for TicketMutex<T, L> {
+impl<T: ?Sized + Default, L:LockAction> Default for TicketMutex<T, L> {
     fn default() -> Self {
         TicketMutex::new(T::default())
     }
 }
 
-impl<T, L> From<T> for TicketMutex<T, L> {
+impl<T, L:LockAction> From<T> for TicketMutex<T, L> {
     fn from(data: T) -> Self {
         Self::new(data)
     }
@@ -290,6 +290,7 @@ impl<'a, T: ?Sized, L: LockAction> DerefMut for TicketMutexGuard<'a, T, L> {
 }
 #[cfg(feature = "lockapi")]
 unsafe impl<L: LockAction> lock_api::RawMutex for TicketMutex<(), L> {
+    #[allow(clippy::declare_interior_mutable_const)]
     const INIT: Self = Self::new(());
     type GuardMarker = lock_api::GuardSend;
 

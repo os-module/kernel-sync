@@ -1,10 +1,16 @@
-﻿//! 基于ArcRcu类型的，和RwLock相似的锁。允许读者和写者同时访问。
+//! 基于ArcRcu类型的，和RwLock相似的锁。允许读者和写者同时访问。
 
-use core::{marker::PhantomData, ops::{Deref, DerefMut}};
+use crate::{
+    arcrcu::{ArcRcu, Guard},
+    LockAction,
+};
+use core::fmt::Debug;
 use core::mem::swap;
 use core::sync::atomic::Ordering;
-use crate::{arcrcu::{ArcRcu, Guard}, LockAction};
-use core::fmt::Debug;
+use core::{
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+};
 
 /// 对ArcRcu的包装，使得其提供和RwLock相似的接口
 /// 该锁本身具备了Arc的性质，RcuLock<T>类似于Arc<RwLock<T>>。
@@ -31,14 +37,14 @@ impl<T: Clone, L: LockAction> Clone for RcuLock<T, L> {
     fn clone(&self) -> Self {
         Self {
             phantom: PhantomData,
-            rcu: self.rcu.clone()
+            rcu: self.rcu.clone(),
         }
     }
 }
 
 impl<T: Clone, L: LockAction> RcuLock<T, L> {
     pub fn new(data: T) -> Self {
-        RcuLock { 
+        RcuLock {
             phantom: PhantomData,
             rcu: ArcRcu::new(data),
         }
@@ -46,7 +52,11 @@ impl<T: Clone, L: LockAction> RcuLock<T, L> {
 
     pub fn read(&self) -> RcuLockReadGuard<T, L> {
         L::before_lock();
-        let index = self.rcu.inner.current_borrow_count_index.load(Ordering::Acquire);
+        let index = self
+            .rcu
+            .inner
+            .current_borrow_count_index
+            .load(Ordering::Acquire);
         self.rcu.inner.borrow_count[index].fetch_add(1, Ordering::AcqRel);
         // let count = self.rcu.inner.borrow_count[index].load(Ordering::Acquire);
         // std::println!("read, index = {index}, count = {} -> {count}", count - 1);
@@ -63,7 +73,11 @@ impl<T: Clone, L: LockAction> RcuLock<T, L> {
         loop {
             match self.rcu.try_update() {
                 Some(guard) => {
-                    let index = self.rcu.inner.current_borrow_count_index.load(Ordering::Acquire);
+                    let index = self
+                        .rcu
+                        .inner
+                        .current_borrow_count_index
+                        .load(Ordering::Acquire);
                     self.rcu.inner.borrow_count[index].fetch_add(1, Ordering::AcqRel);
                     // let count = self.rcu.inner.borrow_count[index].load(Ordering::Acquire);
                     // std::println!("write, index = {index}, count = {} -> {count}", count - 1);
@@ -72,8 +86,8 @@ impl<T: Clone, L: LockAction> RcuLock<T, L> {
                         data: Some(guard),
                         rcu: &self.rcu,
                         borrow_count_index: index,
-                    }
-                },
+                    };
+                }
                 None => {
                     core::hint::spin_loop();
                 }
@@ -85,7 +99,11 @@ impl<T: Clone, L: LockAction> RcuLock<T, L> {
         L::before_lock();
         match self.rcu.try_update() {
             Some(guard) => {
-                let index = self.rcu.inner.current_borrow_count_index.load(Ordering::Acquire);
+                let index = self
+                    .rcu
+                    .inner
+                    .current_borrow_count_index
+                    .load(Ordering::Acquire);
                 self.rcu.inner.borrow_count[index].fetch_add(1, Ordering::AcqRel);
                 // let count = self.rcu.inner.borrow_count[index].load(Ordering::Acquire);
                 // std::println!("try_write, index = {index}, count = {} -> {count}", count - 1);
@@ -95,7 +113,7 @@ impl<T: Clone, L: LockAction> RcuLock<T, L> {
                     rcu: &self.rcu,
                     borrow_count_index: index,
                 })
-            },
+            }
             None => {
                 L::after_lock();
                 None
@@ -142,9 +160,7 @@ impl<'a, T: Clone, L: LockAction> Deref for RcuLockWriteGuard<'a, T, L> {
 
     fn deref(&self) -> &Self::Target {
         match &self.data {
-            Some(guard) => {
-                &*guard
-            },
+            Some(guard) => guard,
             None => {
                 panic!("unreachable76543212345");
             }
@@ -153,12 +169,9 @@ impl<'a, T: Clone, L: LockAction> Deref for RcuLockWriteGuard<'a, T, L> {
 }
 
 impl<'a, T: Clone, L: LockAction> DerefMut for RcuLockWriteGuard<'a, T, L> {
-
     fn deref_mut(&mut self) -> &mut Self::Target {
         match &mut self.data {
-            Some(guard) => {
-                &mut *guard
-            },
+            Some(guard) => &mut *guard,
             None => {
                 panic!("unreachable0989876678");
             }
@@ -174,7 +187,10 @@ impl<'a, T: Clone, L: LockAction> Drop for RcuLockWriteGuard<'a, T, L> {
         drop(guard.unwrap());
         // 将current_borrow_count_index在0和1间切换
         // 这样，更新数据后的读取就不会影响到这个引用计数了
-        self.rcu.inner.current_borrow_count_index.fetch_xor(1, Ordering::AcqRel);
+        self.rcu
+            .inner
+            .current_borrow_count_index
+            .fetch_xor(1, Ordering::AcqRel);
         // 下降引用计数
         self.rcu.inner.borrow_count[self.borrow_count_index].fetch_sub(1, Ordering::AcqRel);
         // let count = self.rcu.inner.borrow_count[self.borrow_count_index].load(Ordering::Acquire);

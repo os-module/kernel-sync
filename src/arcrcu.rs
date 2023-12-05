@@ -1,16 +1,16 @@
-﻿use core::cell::UnsafeCell;
+use core::cell::UnsafeCell;
 use core::fmt::Debug;
-use core::{ops, borrow, ptr, mem};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use core::{borrow, ops, ptr};
 // use std::fmt::Debug;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 
 /// Based on [droundy/rcu-clean/arcrcu.rs](https://github.com/droundy/rcu-clean/blob/master/src/arcrcu.rs) on Github.
-/// 
+///
 /// A thread-safe reference counted pointer that allows interior mutability
-/// 
+///
 /// The [ArcRcu] is functionally roughly equivalent to
 /// `Arc<RwLock<T>>`, except that reads (of the old value) may happen
 /// while a write is taking place.  Reads on an [ArcRcu] are much
@@ -19,8 +19,8 @@ use alloc::sync::Arc;
 /// both ergonomics and read speed.  Writes are slow, so only use this
 /// type if writes are rare (or their speed doesn't matter).
 
-/// ```
-/// let x = rcu_clean::ArcRcu::new(3);
+/// ```ignore
+/// let x = ArcRcu::new(3);
 /// let y: &usize = &(*x);
 /// let z = x.clone();
 /// *x.update() = 7; // Wow, we are mutating something we have borrowed!
@@ -28,7 +28,7 @@ use alloc::sync::Arc;
 /// assert_eq!(*x, 7); // but the pointer now points to the new value.
 /// assert_eq!(*z, 7); // but the cloned pointer also points to the new value.
 /// ```
-/// 
+///
 /// Todo：改一下borrow_count机制，现在只要有读者或写者在占用这个锁，就无法释放旧版本的数据。需要改成Grace Period那样的。
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ impl<T> ops::Deref for ArcRcu<T> {
         //     self.have_borrowed.set(true); // indicate we have borrowed this once.
         // }
         let next = self.inner.list.next.load(Ordering::Acquire);
-        if next == null_mut() {
+        if next.is_null() {
             unsafe { &*self.inner.list.value.get() }
         } else {
             unsafe { &*(*next).value.get() }
@@ -83,13 +83,13 @@ impl<T> ops::Deref for ArcRcu<T> {
 }
 impl<T> borrow::Borrow<T> for ArcRcu<T> {
     fn borrow(&self) -> &T {
-        &*self
+        self
     }
 }
 impl<T> Drop for List<T> {
     fn drop(&mut self) {
         let next = self.next.load(Ordering::Acquire);
-        if next != null_mut() {
+        if !next.is_null() {
             let _free_this = unsafe { Box::from_raw(next) };
         }
     }
@@ -113,8 +113,7 @@ impl<'a, T: Clone> ArcRcu<T> {
     pub fn try_update(&'a self) -> Option<Guard<'a, T>> {
         if self.inner.am_writing.swap(true, Ordering::Relaxed) {
             None
-        }
-        else {
+        } else {
             Some(Guard {
                 list: Some(List {
                     value: UnsafeCell::new((*(*self)).clone()),
@@ -134,16 +133,12 @@ impl<'a, T: Clone> ArcRcu<T> {
         let next = self.inner.list.next.load(Ordering::Acquire);
         // std::println!("clean?");
         // if borrow_count == 0 && next != null_mut() {
-        if next != null_mut() {
+        if !next.is_null() {
             // std::println!("clean.");
             unsafe {
                 // make a copy of the old datum that we will need to free
                 let buffer: UnsafeCell<Option<T>> = UnsafeCell::new(None);
-                ptr::copy_nonoverlapping(
-                    self.inner.list.value.get(),
-                    buffer.get() as *mut T,
-                    1,
-                );
+                ptr::copy_nonoverlapping(self.inner.list.value.get(), buffer.get() as *mut T, 1);
                 // std::println!("clean 1");
                 // now copy the "good" value to the main spot
                 ptr::copy_nonoverlapping((*next).value.get(), self.inner.list.value.get(), 1);
@@ -189,7 +184,7 @@ impl<'a, T: Clone> ops::DerefMut for Guard<'a, T> {
 }
 impl<'a, T: Clone> Drop for Guard<'a, T> {
     fn drop(&mut self) {
-        let list = mem::replace(&mut self.list, None);
+        let list = self.list.take();
         self.rc_guts
             .list
             .next
