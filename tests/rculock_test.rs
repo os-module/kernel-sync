@@ -70,7 +70,6 @@ fn read_write_test() {
                     assert_eq!(*write_1, 1);
                     std::thread::sleep(std::time::Duration::from_secs(4));
                     assert_eq!(*write_1, 1);
-                    // std::thread::sleep(std::time::Duration::from_secs(4));
                     drop(x);
                     std::println!("thread1 ends.");
                 },
@@ -95,7 +94,6 @@ fn read_write_test() {
                     let write_4 = &mut *x;
                     *write_4 += 1;
                     assert_eq!(*write_4, 2);
-                    // std::thread::sleep(std::time::Duration::from_secs(6));
                     drop(x);
                     std::println!("thread3 ends.");
                 },

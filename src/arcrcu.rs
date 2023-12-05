@@ -1,12 +1,13 @@
-﻿use core::cell::{Cell, UnsafeCell};
+﻿use core::cell::UnsafeCell;
+use core::fmt::Debug;
 use core::{ops, borrow, ptr, mem};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-use std::fmt::Debug;
+// use std::fmt::Debug;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 
-/// Based on [droundy/rcu-clean/arcrcu.rs](https://github.com/droundy/rcu-clean) on Github.
+/// Based on [droundy/rcu-clean/arcrcu.rs](https://github.com/droundy/rcu-clean/blob/master/src/arcrcu.rs) on Github.
 /// 
 /// A thread-safe reference counted pointer that allows interior mutability
 /// 
@@ -29,6 +30,8 @@ use alloc::sync::Arc;
 /// ```
 /// 
 /// Todo：改一下borrow_count机制，现在只要有读者或写者在占用这个锁，就无法释放旧版本的数据。需要改成Grace Period那样的。
+
+#[derive(Debug)]
 pub struct ArcRcu<T> {
     pub inner: Arc<Inner<T>>,
 }
@@ -41,6 +44,14 @@ impl<T: Clone> Clone for ArcRcu<T> {
         }
     }
 }
+
+// impl<T: Clone + Debug> Debug for ArcRcu<T> {
+//     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+//         f.debug_struct("ArcRcu").field("inner", &self.inner).finish()
+//     }
+// }
+
+#[derive(Debug)]
 pub struct Inner<T> {
     pub borrow_count: [AtomicUsize; 2],
     pub current_borrow_count_index: AtomicUsize,
@@ -48,6 +59,7 @@ pub struct Inner<T> {
     list: List<T>,
 }
 
+#[derive(Debug)]
 pub struct List<T> {
     value: UnsafeCell<T>,
     next: AtomicPtr<List<T>>,
@@ -80,12 +92,6 @@ impl<T> Drop for List<T> {
         if next != null_mut() {
             let _free_this = unsafe { Box::from_raw(next) };
         }
-    }
-}
-
-impl<T> Debug for List<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("List").field("next", &self.next).finish()
     }
 }
 

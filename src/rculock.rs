@@ -4,41 +4,48 @@ use core::{marker::PhantomData, ops::{Deref, DerefMut}};
 use core::mem::swap;
 use core::sync::atomic::Ordering;
 use crate::{arcrcu::{ArcRcu, Guard}, LockAction};
+use core::fmt::Debug;
 
 /// 对ArcRcu的包装，使得其提供和RwLock相似的接口
-/// R代表读取数据前后，内核需要执行的操作；W代表写入数据前后，内核需要执行的操作
-/// SAFETY: W中的after_lock函数需要等待写者前的所有读者结束，这样才能正常释放旧版本数据的空间。
-pub struct RcuLock<T: Clone, R: LockAction, W: LockAction> {
-    phantom_r: PhantomData<R>,
-    phantom_w: PhantomData<W>,
+/// 该锁本身具备了Arc的性质，RcuLock<T>类似于Arc<RwLock<T>>。
+/// 使用引用计数机制来实现RCU。
+/// 使用长度为2的数组来记录引用计数。初始时，在位置0记录引用计数。写者每更新一次数据，就将记录引用计数的位置在0和1之间切换一次。
+/// 这样，更新后的读者就不会影响到这个写者的宽限期（grace peroid）了，其只需等待写者之前的读者完成，然后释放旧版本的数据即可。
+/// 最好在L中实现关中断，这样可以避免将某些更新后的读者划到写者的宽限期。
+
+pub struct RcuLock<T: Clone, L: LockAction> {
+    phantom: PhantomData<L>,
     rcu: ArcRcu<T>,
 }
 
-unsafe impl<T: Clone + Send + Sync, R: LockAction, W: LockAction> Send for RcuLock<T, R, W> {}
-unsafe impl<T: Clone + Send + Sync, R: LockAction, W: LockAction> Sync for RcuLock<T, R, W> {}
+impl<T: Clone + Debug, L: LockAction> Debug for RcuLock<T, L> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RcuLock").field("rcu", &self.rcu).finish()
+    }
+}
 
-impl<T: Clone, R: LockAction, W: LockAction> Clone for RcuLock<T, R, W> {
+unsafe impl<T: Clone + Send + Sync, L: LockAction> Send for RcuLock<T, L> {}
+unsafe impl<T: Clone + Send + Sync, L: LockAction> Sync for RcuLock<T, L> {}
+
+impl<T: Clone, L: LockAction> Clone for RcuLock<T, L> {
     fn clone(&self) -> Self {
         Self {
-            phantom_r: PhantomData,
-            phantom_w: PhantomData,
+            phantom: PhantomData,
             rcu: self.rcu.clone()
         }
     }
 }
 
-impl<T: Clone, R: LockAction, W: LockAction> RcuLock<T, R, W> {
+impl<T: Clone, L: LockAction> RcuLock<T, L> {
     pub fn new(data: T) -> Self {
         RcuLock { 
-            phantom_r: PhantomData,
-            phantom_w: PhantomData,
+            phantom: PhantomData,
             rcu: ArcRcu::new(data),
         }
     }
 
-    /// read必定成功，因此没有try_read
-    pub fn read(&self) -> RcuLockReadGuard<T, R> {
-        R::before_lock();
+    pub fn read(&self) -> RcuLockReadGuard<T, L> {
+        L::before_lock();
         let index = self.rcu.inner.current_borrow_count_index.load(Ordering::Acquire);
         self.rcu.inner.borrow_count[index].fetch_add(1, Ordering::AcqRel);
         // let count = self.rcu.inner.borrow_count[index].load(Ordering::Acquire);
@@ -51,8 +58,8 @@ impl<T: Clone, R: LockAction, W: LockAction> RcuLock<T, R, W> {
         }
     }
 
-    pub fn write(&self) -> RcuLockWriteGuard<T, W> {
-        W::before_lock();
+    pub fn write(&self) -> RcuLockWriteGuard<T, L> {
+        L::before_lock();
         loop {
             match self.rcu.try_update() {
                 Some(guard) => {
@@ -74,8 +81,8 @@ impl<T: Clone, R: LockAction, W: LockAction> RcuLock<T, R, W> {
         }
     }
 
-    pub fn try_write(&self) -> Option<RcuLockWriteGuard<T, W>> {
-        W::before_lock();
+    pub fn try_write(&self) -> Option<RcuLockWriteGuard<T, L>> {
+        L::before_lock();
         match self.rcu.try_update() {
             Some(guard) => {
                 let index = self.rcu.inner.current_borrow_count_index.load(Ordering::Acquire);
@@ -90,22 +97,22 @@ impl<T: Clone, R: LockAction, W: LockAction> RcuLock<T, R, W> {
                 })
             },
             None => {
-                W::after_lock();
+                L::after_lock();
                 None
             }
         }
     }
 }
 
-/// 对读取RCU获得的结构的封装，目前这层封装是为了调用R的方法
-pub struct RcuLockReadGuard<'a, T: Clone, R: LockAction> {
-    phantom: PhantomData<R>,
+/// 对读取RCU获得的结构的封装，目前这层封装是为了调用R的方法，以及维护引用计数
+pub struct RcuLockReadGuard<'a, T: Clone, L: LockAction> {
+    phantom: PhantomData<L>,
     data: &'a T,
     rcu: &'a ArcRcu<T>,
     borrow_count_index: usize,
 }
 
-impl<'a, T: Clone, R: LockAction> Deref for RcuLockReadGuard<'a, T, R> {
+impl<'a, T: Clone, L: LockAction> Deref for RcuLockReadGuard<'a, T, L> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -113,24 +120,24 @@ impl<'a, T: Clone, R: LockAction> Deref for RcuLockReadGuard<'a, T, R> {
     }
 }
 
-impl<'a, T: Clone, R: LockAction> Drop for RcuLockReadGuard<'a, T, R> {
+impl<'a, T: Clone, L: LockAction> Drop for RcuLockReadGuard<'a, T, L> {
     fn drop(&mut self) {
         self.rcu.inner.borrow_count[self.borrow_count_index].fetch_sub(1, Ordering::AcqRel);
         // let count = self.rcu.inner.borrow_count[self.borrow_count_index].load(Ordering::Acquire);
         // std::println!("read drop, index = {}, count = {} -> {count}", self.borrow_count_index, count + 1);
-        R::after_lock();
+        L::after_lock();
     }
 }
 
-pub struct RcuLockWriteGuard<'a, T: Clone, W: LockAction> {
-    phantom: PhantomData<W>,
+pub struct RcuLockWriteGuard<'a, T: Clone, L: LockAction> {
+    phantom: PhantomData<L>,
     data: Option<Guard<'a, T>>,
     /// 这个Guard所属的RCU
     rcu: &'a ArcRcu<T>,
     borrow_count_index: usize,
 }
 
-impl<'a, T: Clone, W: LockAction> Deref for RcuLockWriteGuard<'a, T, W> {
+impl<'a, T: Clone, L: LockAction> Deref for RcuLockWriteGuard<'a, T, L> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -145,7 +152,7 @@ impl<'a, T: Clone, W: LockAction> Deref for RcuLockWriteGuard<'a, T, W> {
     }
 }
 
-impl<'a, T: Clone, W: LockAction> DerefMut for RcuLockWriteGuard<'a, T, W> {
+impl<'a, T: Clone, L: LockAction> DerefMut for RcuLockWriteGuard<'a, T, L> {
 
     fn deref_mut(&mut self) -> &mut Self::Target {
         match &mut self.data {
@@ -159,7 +166,7 @@ impl<'a, T: Clone, W: LockAction> DerefMut for RcuLockWriteGuard<'a, T, W> {
     }
 }
 
-impl<'a, T: Clone, W: LockAction> Drop for RcuLockWriteGuard<'a, T, W> {
+impl<'a, T: Clone, L: LockAction> Drop for RcuLockWriteGuard<'a, T, L> {
     fn drop(&mut self) {
         // 需要提前释放guard，这样才能使更改生效
         let mut guard: Option<Guard<T>> = None;
@@ -180,9 +187,6 @@ impl<'a, T: Clone, W: LockAction> Drop for RcuLockWriteGuard<'a, T, W> {
         self.rcu.clean();
         // 释放写者锁
         self.rcu.inner.am_writing.store(false, Ordering::Relaxed);
-        W::after_lock();
+        L::after_lock();
     }
 }
-
-
-
